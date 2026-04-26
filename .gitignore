@@ -11,7 +11,7 @@ wheels/
 # Data and models
 DATA/
 models/
-.dvc/config.local
+.dvc/config.localdvc remote list
 /DATA
 
 !src/my project/
