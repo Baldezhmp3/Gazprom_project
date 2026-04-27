@@ -3,9 +3,10 @@ import csv
 import hashlib
 import re
 import time
-from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
+
+import random
 
 import requests
 from bs4 import BeautifulSoup
@@ -238,8 +239,8 @@ def save_csv(items: list[dict], out_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mirkvartir apartment parser")
     parser.add_argument("--url", default=BASE_URL, help="Start listing URL")
-    parser.add_argument("--pages", type=int, default=1, help="How many listing pages to parse")
-    parser.add_argument("--limit", type=int, default=3, help="Max apartments to collect")
+    parser.add_argument("--pages", type=int, default=400, help="How many listing pages to parse")
+    parser.add_argument("--limit", type=int, default=10000, help="Max apartments to collect")
     parser.add_argument("--pause", type=float, default=0.5, help="Pause between requests")
     parser.add_argument(
         "--output",
