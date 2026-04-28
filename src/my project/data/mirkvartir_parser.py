@@ -52,11 +52,12 @@ def is_blocked_response(resp: requests.Response) -> bool:
     body = resp.text.lower()
     blocked_markers = (
         "captcha",
+        "/captcha/",
         "access denied",
-        "forbidden",
         "too many requests",
-        "bot",
-        "cloudflare",
+        "проверьте, что вы не робот",
+        "подозрительная активность",
+        "cf-chl",
     )
     return any(marker in body for marker in blocked_markers)
 
@@ -162,18 +163,17 @@ def extract_images(soup: BeautifulSoup, html: str, detail_url: str) -> list[str]
 def save_image_to_s3(session, url, listing_id, idx):
     """Качает фото и сразу льет в S3. Возвращает S3 URI """
     try:
-        resp = fetch_with_retry(session, url, timeout=15, retries=3, base_pause=0.5)
+        resp = session.get(url, timeout=15)
         resp.raise_for_status()
 
         ext = Path(urlparse(url).path).suffix.lower() or ".jpg"
         s3_key = f"images/{listing_id}/{idx:03d}{ext}"  # Это Key объекта [cite: 47]
 
-        # Загружаем байты [cite: 67, 68]
         s3_client.put_object(
             Bucket=BUCKET_NAME,
             Key=s3_key,
             Body=resp.content,
-            ContentType="image/jpeg"
+            ContentType="image/jpeg",
         )
         return f"s3://{BUCKET_NAME}/{s3_key}"  # Возвращаем URI [cite: 181]
     except Exception as e:
@@ -293,16 +293,22 @@ def get_fieldnames() -> list[str]:
         "latitude",
         "longitude",
         "description_text",
-        "images_count",
-        "images",
     ]
 
 
 def normalize_row(item: dict) -> dict:
-    row = dict(item)
-    row["images_count"] = len(item.get("images", []))
-    row["images"] = ";".join(item.get("images", []))
-    return row
+    return {
+        "id": item.get("id"),
+        "url": item.get("url"),
+        "title": item.get("title"),
+        "price_rub": item.get("price_rub"),
+        "area_m2": item.get("area_m2"),
+        "floor_current": item.get("floor_current"),
+        "floor_total": item.get("floor_total"),
+        "latitude": item.get("latitude"),
+        "longitude": item.get("longitude"),
+        "description_text": item.get("description_text"),
+    }
 
 
 def append_csv_row(item: dict, out_path: Path) -> None:
@@ -320,8 +326,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Mirkvartir apartment parser")
     parser.add_argument("--url", default=BASE_URL, help="Start listing URL")
     parser.add_argument("--pages", type=int, default=400, help="How many listing pages to parse")
-    parser.add_argument("--limit", type=int, default=3, help="Max apartments to collect")
-    parser.add_argument("--pause", type=float, default=0.5, help="Pause between requests")
+    parser.add_argument("--limit", type=int, default=1000, help="Max apartments to collect")
+    parser.add_argument("--pause", type=float, default=0.1, help="Pause between requests")
     parser.add_argument(
         "--output",
         default=None,
