@@ -34,6 +34,64 @@ s3_client = boto3.client(
 
 
 BUCKET_NAME = "mirkvartir"
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_7_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+]
+
+
+class BlockedBySiteError(RuntimeError):
+    pass
+
+
+def is_blocked_response(resp: requests.Response) -> bool:
+    blocked_statuses = {403, 429, 503}
+    if resp.status_code in blocked_statuses:
+        return True
+    body = resp.text.lower()
+    blocked_markers = (
+        "captcha",
+        "access denied",
+        "forbidden",
+        "too many requests",
+        "bot",
+        "cloudflare",
+    )
+    return any(marker in body for marker in blocked_markers)
+
+
+def fetch_with_retry(
+    session: requests.Session,
+    url: str,
+    timeout: int = 25,
+    retries: int = 4,
+    base_pause: float = 0.7,
+) -> requests.Response:
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        session.headers["User-Agent"] = random.choice(USER_AGENTS)
+        try:
+            resp = session.get(url, timeout=timeout)
+            if is_blocked_response(resp):
+                raise BlockedBySiteError(
+                    f"Site blocked request (status={resp.status_code}) for {url}"
+                )
+            resp.raise_for_status()
+            return resp
+        except BlockedBySiteError:
+            raise
+        except requests.RequestException as err:
+            last_error = err
+            if attempt == retries:
+                break
+            backoff = base_pause * (2 ** (attempt - 1)) + random.uniform(0.2, 1.0)
+            print(f"Retry {attempt}/{retries - 1} for {url}, sleeping {backoff:.2f}s")
+            time.sleep(backoff)
+
+    if last_error:
+        raise last_error
+    raise requests.RequestException(f"Failed to fetch {url}")
 
 
 def to_int(value: str | None) -> int | None:
@@ -70,6 +128,7 @@ def slug_from_url(url: str) -> str:
 def extract_coordinates(html: str) -> tuple[float | None, float | None]:
     patterns = [
         r'"lat"\s*:\s*([0-9]+\.[0-9]+)\s*,\s*"lng"\s*:\s*([0-9]+\.[0-9]+)',
+        r'"lat"\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*"lon"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
         r'"latitude"\s*:\s*([0-9]+\.[0-9]+)\s*,\s*"longitude"\s*:\s*([0-9]+\.[0-9]+)',
         r"point\s*:\s*\[\s*([0-9]+\.[0-9]+)\s*,\s*([0-9]+\.[0-9]+)\s*\]",
     ]
@@ -103,7 +162,7 @@ def extract_images(soup: BeautifulSoup, html: str, detail_url: str) -> list[str]
 def save_image_to_s3(session, url, listing_id, idx):
     """Качает фото и сразу льет в S3. Возвращает S3 URI """
     try:
-        resp = session.get(url, timeout=15)
+        resp = fetch_with_retry(session, url, timeout=15, retries=3, base_pause=0.5)
         resp.raise_for_status()
 
         ext = Path(urlparse(url).path).suffix.lower() or ".jpg"
@@ -123,8 +182,7 @@ def save_image_to_s3(session, url, listing_id, idx):
 
 
 def extract_detail(session: requests.Session, url: str, root_image_dir: Path, pause: float) -> dict:
-    resp = session.get(url, timeout=25)
-    resp.raise_for_status()
+    resp = fetch_with_retry(session, url, timeout=25, retries=4, base_pause=0.7)
     html = resp.text
     soup = BeautifulSoup(html, "html.parser")
 
@@ -133,6 +191,8 @@ def extract_detail(session: requests.Session, url: str, root_image_dir: Path, pa
         soup.select_one('[itemprop="description"]')
         or soup.select_one(".offer-description")
         or soup.select_one(".offer_text")
+        or soup.select_one(".l-object-description")
+        or soup.select_one(".m-description")
     )
     price_node = soup.select_one('[itemprop="price"]') or soup.select_one(".price")
     area_node = soup.find(string=re.compile(r"м²"))
@@ -176,9 +236,10 @@ def listing_links(soup: BeautifulSoup, base_url: str) -> list[str]:
     return sorted(links)
 
 
-def parse_pages(start_url: str, pages: int, pause: float, limit: int | None) -> list[dict]:
+def parse_pages(start_url: str, pages: int, pause: float, limit: int | None, out_csv: Path) -> list[dict]:
     session = requests.Session()
     session.headers.update(HEADERS)
+    session.headers.update({"Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"})
 
     data_dir = PROJECT_ROOT / "DATA"
     image_root = data_dir / "images"
@@ -190,30 +251,38 @@ def parse_pages(start_url: str, pages: int, pause: float, limit: int | None) -> 
 
     for page in range(1, pages + 1):
         page_url = start_url if page == 1 else f"{start_url}?p={page}"
-        resp = session.get(page_url, timeout=25)
-        resp.raise_for_status()
+        try:
+            resp = fetch_with_retry(session, page_url, timeout=25, retries=4, base_pause=0.7)
+        except BlockedBySiteError as err:
+            print(f"Blocked on listing page, stopping parser: {err}")
+            return collected
         soup = BeautifulSoup(resp.text, "html.parser")
 
         for url in listing_links(soup, start_url):
             if url in seen:
                 continue
             seen.add(url)
+            print(f"Parsing object: {url}")
             try:
                 item = extract_detail(session, url, image_root, pause)
                 collected.append(item)
+                append_csv_row(item, out_csv)
+                print(f"Saved object #{len(collected)}: id={item['id']}")
+            except BlockedBySiteError as err:
+                print(f"Blocked while parsing object, stopping parser: {err}")
+                return collected
             except requests.RequestException:
                 continue
 
             if limit and len(collected) >= limit:
                 return collected
-            time.sleep(pause)
+            time.sleep(pause + random.uniform(0.2, 1.0))
 
     return collected
 
 
-def save_csv(items: list[dict], out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
+def get_fieldnames() -> list[str]:
+    return [
         "id",
         "url",
         "title",
@@ -227,20 +296,31 @@ def save_csv(items: list[dict], out_path: Path) -> None:
         "images_count",
         "images",
     ]
-    with out_path.open("w", encoding="utf-8-sig", newline="") as f:
+
+
+def normalize_row(item: dict) -> dict:
+    row = dict(item)
+    row["images_count"] = len(item.get("images", []))
+    row["images"] = ";".join(item.get("images", []))
+    return row
+
+
+def append_csv_row(item: dict, out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = get_fieldnames()
+    write_header = not out_path.exists() or out_path.stat().st_size == 0
+    with out_path.open("a", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for item in items:
-            row = dict(item)
-            row["images_count"] = len(item.get("images", []))
-            row["images"] = ";".join(item.get("images", []))
-            writer.writerow(row)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(normalize_row(item))
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mirkvartir apartment parser")
     parser.add_argument("--url", default=BASE_URL, help="Start listing URL")
     parser.add_argument("--pages", type=int, default=400, help="How many listing pages to parse")
-    parser.add_argument("--limit", type=int, default=10000, help="Max apartments to collect")
+    parser.add_argument("--limit", type=int, default=3, help="Max apartments to collect")
     parser.add_argument("--pause", type=float, default=0.5, help="Pause between requests")
     parser.add_argument(
         "--output",
@@ -249,14 +329,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    items = parse_pages(args.url, args.pages, args.pause, args.limit)
     if args.output:
         out_csv = Path(args.output)
         if not out_csv.is_absolute():
             out_csv = PROJECT_ROOT / out_csv
     else:
         out_csv = PROJECT_ROOT / "DATA" / f"apartments.csv"
-    save_csv(items, out_csv)
+
+    # Start with clean file so we always have a consistent stream result.
+    if out_csv.exists():
+        out_csv.unlink()
+
+    items = parse_pages(args.url, args.pages, args.pause, args.limit, out_csv)
     print(f"Saved {len(items)} records to {out_csv}")
 
 
