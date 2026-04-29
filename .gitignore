@@ -14,5 +14,5 @@ DATA/
 .dvc/config.localdvc remote list
 /DATA
 
-!src/my project/
+!src/my_project/
 
