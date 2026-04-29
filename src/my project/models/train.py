@@ -62,7 +62,7 @@ def train_optimized_model():
     print("\n" + "=" * 30)
     print(f"ФИНАЛЬНЫЙ R2: {r2_score(y_holdout, preds):.4f}")
     print(f"ФИНАЛЬНЫЙ MAPE: {mean_absolute_percentage_error(y_holdout, preds) * 100:.2f}%")
-    print(f"ФИНАЛЬНЫЙ MAE: {mean_absolute_error(y_holdout, preds) * 100:.2f}%")
+    print(f"ФИНАЛЬНЫЙ MAE: {mean_absolute_error(y_holdout, preds):.2f}")
     print("=" * 30)
 
     # Сохраняем лучшую версию
