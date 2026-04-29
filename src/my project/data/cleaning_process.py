@@ -9,7 +9,8 @@ def process_and_validate():
     df = pd.read_csv("C:/Users/0/PycharmProjects/Gazprom/DATA/apartments.csv")
 
     # 2. Очистка (CSV превращает списки в строки "[...]", возвращаем их обратно)
-    df['images'] = df['images'].apply(lambda x: x.split(';') if isinstance(x, str) else [])
+    # df['images'] = df['images'].apply(lambda x: x.split(';') if isinstance(x, str) else [])
+    df = df.dropna(subset=['latitude', 'longitude', 'price_rub'])
 
     # 3. Валидация
     try:

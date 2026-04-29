@@ -8,9 +8,11 @@ dependencies = [
     "beautifulsoup4>=4.14.3",
     "boto3>=1.42.96",
     "dvc>=3.67.1",
+    "geopy>=2.4.1",
     "pandas>=3.0.2",
     "pandera>=0.31.1",
     "pyarrow>=24.0.0",
     "requests>=2.33.1",
+    "scipy>=1.17.1",
     "tqdm>=4.67.3",
 ]

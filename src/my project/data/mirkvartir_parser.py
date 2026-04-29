@@ -202,11 +202,11 @@ def extract_detail(session: requests.Session, url: str, root_image_dir: Path, pa
     image_urls = extract_images(soup, html, url)
     listing_id = slug_from_url(url)
     s3_images = []
-    for i, img_url in enumerate(image_urls[:5], start=1):
-        uri = save_image_to_s3(session, img_url, listing_id, i)
-        if uri:
-            s3_images.append(uri)
-        time.sleep(pause)
+    # for i, img_url in enumerate(image_urls[:5], start=1):
+    #     uri = save_image_to_s3(session, img_url, listing_id, i)
+    #     if uri:
+    #         s3_images.append(uri)
+    #     time.sleep(pause)
     current_floor, total_floors = floor_pair(floor_node if isinstance(floor_node, str) else None)
 
     return {
@@ -237,6 +237,15 @@ def listing_links(soup: BeautifulSoup, base_url: str) -> list[str]:
 
 
 def parse_pages(start_url: str, pages: int, pause: float, limit: int | None, out_csv: Path) -> list[dict]:
+    seen: set[str] = set()
+
+    # Читаем уже скачанные ID из файла, если он существует
+    if out_csv.exists():
+        with open(out_csv, "r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                seen.add(row["url"])
+
     session = requests.Session()
     session.headers.update(HEADERS)
     session.headers.update({"Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"})
@@ -326,7 +335,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Mirkvartir apartment parser")
     parser.add_argument("--url", default=BASE_URL, help="Start listing URL")
     parser.add_argument("--pages", type=int, default=400, help="How many listing pages to parse")
-    parser.add_argument("--limit", type=int, default=1000, help="Max apartments to collect")
+    parser.add_argument("--limit", type=int, default=500, help="Max apartments to collect")
     parser.add_argument("--pause", type=float, default=0.1, help="Pause between requests")
     parser.add_argument(
         "--output",
@@ -343,8 +352,8 @@ def main() -> None:
         out_csv = PROJECT_ROOT / "DATA" / f"apartments.csv"
 
     # Start with clean file so we always have a consistent stream result.
-    if out_csv.exists():
-        out_csv.unlink()
+    # if out_csv.exists():
+    #     out_csv.unlink()
 
     items = parse_pages(args.url, args.pages, args.pause, args.limit, out_csv)
     print(f"Saved {len(items)} records to {out_csv}")
