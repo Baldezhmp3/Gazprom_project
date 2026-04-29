@@ -10,7 +10,7 @@ wheels/
 .venv
 # Data and models
 DATA/
-models/
+# models/
 .dvc/config.localdvc remote list
 /DATA
 
